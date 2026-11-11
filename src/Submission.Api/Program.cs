@@ -1,59 +1,77 @@
-// EduSubmit – lát cắt 1: Submission.Api (vai trò MÁY CHỦ)
-// Chạy: dotnet run --project src/Submission.Api --urls http://localhost:5000
-
+// EduSubmit – API REST cho bài tập và lượt nộp (dữ liệu lưu trong RAM).
 var builder = WebApplication.CreateBuilder(args);
 var app = builder.Build();
 
-// Dữ liệu mẫu trong bộ nhớ (chưa dùng cơ sở dữ liệu)
-var assignments = new[]
+var assignments = new List<AssignmentDto>
 {
-    new Assignment(1, "Bai tap 1", "Tao API dau tien"),
-    new Assignment(2, "Bai tap 2", "Goi API tu client")
+    new(1, "Bai tap REST API", "Thiet ke endpoint va hop dong HTTP", true),
+    new(2, "Bai tap Client", "Viet console client dung HttpClient", true)
 };
+var submissions = new List<SubmissionDto>();
 
-// GET / : kiểm tra dịch vụ đang chạy
-app.MapGet("/", () => Results.Ok(new {
-    service = "Submission.Api",
-    status = "running"
-}));
+app.MapGet("/", () => Results.Ok(new { service = "Submission.Api", status = "running" }));
 
-// GET /api/assignments : lấy danh sách bài tập
 app.MapGet("/api/assignments", () => Results.Ok(assignments));
 
-// POST /api/submissions : gửi một lượt nộp bài
-app.MapPost("/api/submissions", (CreateSubmissionRequest request) => {
-    // 1. Kiểm tra dữ liệu đầu vào trước khi xử lý
-    if (request.AssignmentId <= 0 ||
-        string.IsNullOrWhiteSpace(request.StudentCode) ||
-        string.IsNullOrWhiteSpace(request.RepositoryUrl)) {
-        return Results.BadRequest(new { message = "Du lieu nop bai khong hop le" });
-    }
+app.MapGet("/api/assignments/{assignmentId:int}", (int assignmentId) =>
+{
+    var assignment = assignments.FirstOrDefault(item => item.Id == assignmentId);
+    return assignment is null
+        ? Results.NotFound(new ApiError("ASSIGNMENT_NOT_FOUND", "Khong tim thay bai tap."))
+        : Results.Ok(assignment);
+});
 
-    // 2. Ghi nhận lượt nộp với trạng thái ban đầu "received"
-    var submission = new SubmissionResult(
-        Guid.NewGuid(),
-        request.AssignmentId,
-        request.StudentCode,
-        "received",
-        DateTimeOffset.UtcNow);
+app.MapPost("/api/assignments/{assignmentId:int}/submissions",
+    (int assignmentId, CreateSubmissionRequest request) =>
+    {
+        // Thứ tự kiểm tra là một phần của hợp đồng nghiệp vụ.
+        var assignment = assignments.FirstOrDefault(item => item.Id == assignmentId);
+        if (assignment is null)
+        {
+            return Results.NotFound(new ApiError("ASSIGNMENT_NOT_FOUND", "Khong tim thay bai tap."));
+        }
 
-    // 3. Trả 201 Created kèm header Location
-    return Results.Created($"/api/submissions/{submission.Id}", submission);
+        if (!assignment.IsOpen)
+        {
+            return Results.BadRequest(new ApiError("ASSIGNMENT_CLOSED", "Bai tap da dong."));
+        }
+
+        if (string.IsNullOrWhiteSpace(request.StudentCode) ||
+            string.IsNullOrWhiteSpace(request.RepositoryUrl))
+        {
+            return Results.BadRequest(new ApiError(
+                "INVALID_SUBMISSION", "Thieu ma sinh vien hoac kho ma nguon."));
+        }
+
+        var submission = new SubmissionDto(
+            Guid.NewGuid(),
+            assignmentId,
+            request.StudentCode.Trim(),
+            request.RepositoryUrl.Trim(),
+            "received",
+            DateTimeOffset.UtcNow);
+        submissions.Add(submission);
+
+        return Results.Created($"/api/submissions/{submission.Id}", submission);
+    });
+
+app.MapGet("/api/submissions/{submissionId:guid}", (Guid submissionId) =>
+{
+    var submission = submissions.FirstOrDefault(item => item.Id == submissionId);
+    return submission is null
+        ? Results.NotFound(new ApiError("SUBMISSION_NOT_FOUND", "Khong tim thay luot nop."))
+        : Results.Ok(submission);
 });
 
 app.Run();
 
-// Hợp đồng dữ liệu trao đổi qua ranh giới API
-record Assignment(int Id, string Title, string Description);
-
-record CreateSubmissionRequest(
-    int AssignmentId,
-    string StudentCode,
-    string RepositoryUrl);
-
-record SubmissionResult(
+record AssignmentDto(int Id, string Title, string Description, bool IsOpen);
+record CreateSubmissionRequest(string StudentCode, string RepositoryUrl);
+record SubmissionDto(
     Guid Id,
     int AssignmentId,
     string StudentCode,
+    string RepositoryUrl,
     string Status,
     DateTimeOffset ReceivedAt);
+record ApiError(string Code, string Message);
